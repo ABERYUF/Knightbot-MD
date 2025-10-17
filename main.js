@@ -33,6 +33,7 @@ const deleteCommand = require('./commands/delete');
 const { handleAntilinkCommand, handleLinkDetection } = require('./commands/antilink');
 const { handleAntitagCommand, handleTagDetection } = require('./commands/antitag');
 const { Antilink } = require('./lib/antilink');
+const { handleMentionDetection, mentionToggleCommand, setMentionCommand } = require('./commands/mention');
 const memeCommand = require('./commands/meme');
 const tagCommand = require('./commands/tag');
 const tagNotAdminCommand = require('./commands/tagnotadmin');
@@ -148,7 +149,7 @@ async function handleMessages(sock, messageUpdate, printLog) {
 
         // Store message for antidelete feature
         if (message.message) {
-            storeMessage(message);
+            storeMessage(sock, message);
         }
 
         // Handle message revocation
@@ -224,6 +225,8 @@ async function handleMessages(sock, messageUpdate, printLog) {
         // Check for bad words FIRST, before ANY other processing
         if (isGroup && userMessage) {
             await handleBadwordDetection(sock, chatId, message, userMessage, senderId);
+
+            await Antilink(message, sock);
         }
 
         // PM blocker: block non-owner DMs when enabled (do not ban)
@@ -248,9 +251,8 @@ async function handleMessages(sock, messageUpdate, printLog) {
             if (isGroup) {
                 // Process non-command messages first
                 await handleChatbotResponse(sock, chatId, message, userMessage, senderId);
-                await Antilink(message, sock);
-                await handleBadwordDetection(sock, chatId, message, userMessage, senderId);
                 await handleTagDetection(sock, chatId, message, senderId);
+                await handleMentionDetection(sock, chatId, message);
             }
             return;
         }
@@ -338,9 +340,21 @@ async function handleMessages(sock, messageUpdate, printLog) {
                 await unmuteCommand(sock, chatId, senderId);
                 break;
             case userMessage.startsWith('.ban'):
+                if (!isGroup) {
+                    if (!message.key.fromMe && !senderIsSudo) {
+                        await sock.sendMessage(chatId, { text: 'Only owner/sudo can use .ban in private chat.' }, { quoted: message });
+                        break;
+                    }
+                }
                 await banCommand(sock, chatId, message);
                 break;
             case userMessage.startsWith('.unban'):
+                if (!isGroup) {
+                    if (!message.key.fromMe && !senderIsSudo) {
+                        await sock.sendMessage(chatId, { text: 'Only owner/sudo can use .unban in private chat.' }, { quoted: message });
+                        break;
+                    }
+                }
                 await unbanCommand(sock, chatId, message);
                 break;
             case userMessage === '.help' || userMessage === '.menu' || userMessage === '.bot' || userMessage === '.list':
@@ -446,12 +460,8 @@ async function handleMessages(sock, messageUpdate, printLog) {
             case userMessage === '.owner':
                 await ownerCommand(sock, chatId);
                 break;
-            case userMessage === '.tagall':
-                if (isSenderAdmin || message.key.fromMe) {
-                    await tagAllCommand(sock, chatId, senderId, message);
-                } else {
-                    await sock.sendMessage(chatId, { text: 'Sorry, only group admins can use the .tagall command.', ...channelInfo }, { quoted: message });
-                }
+             case userMessage === '.tagall':
+                await tagAllCommand(sock, chatId, senderId, message);
                 break;
             case userMessage === '.tagnotadmin':
                 await tagNotAdminCommand(sock, chatId, senderId, message);
@@ -610,6 +620,19 @@ async function handleMessages(sock, messageUpdate, printLog) {
             case userMessage === '.alive':
                 await aliveCommand(sock, chatId, message);
                 break;
+            case userMessage.startsWith('.mention '):
+                {
+                    const args = userMessage.split(' ').slice(1).join(' ');
+                    const isOwner = message.key.fromMe || senderIsSudo;
+                    await mentionToggleCommand(sock, chatId, message, args, isOwner);
+                }
+                break;
+            case userMessage === '.setmention':
+                {
+                    const isOwner = message.key.fromMe || senderIsSudo;
+                    await setMentionCommand(sock, chatId, message, isOwner);
+                }
+                break;
             case userMessage.startsWith('.blur'):
                 const quotedMessage = message.message?.extendedTextMessage?.contextInfo?.quotedMessage;
                 await blurCommand(sock, chatId, message, quotedMessage);
@@ -688,9 +711,13 @@ async function handleMessages(sock, messageUpdate, printLog) {
                 const match = userMessage.slice(8).trim();
                 await handleChatbotCommand(sock, chatId, message, match);
                 break;
-            case userMessage.startsWith('.take'):
-                const takeArgs = rawText.slice(5).trim().split(' ');
-                await takeCommand(sock, chatId, message, takeArgs);
+            case userMessage.startsWith('.take') || userMessage.startsWith('.steal'):
+                {
+                    const isSteal = userMessage.startsWith('.steal');
+                    const sliceLen = isSteal ? 6 : 5; // '.steal' vs '.take'
+                    const takeArgs = rawText.slice(sliceLen).trim().split(' ');
+                    await takeCommand(sock, chatId, message, takeArgs);
+                }
                 break;
             case userMessage === '.flirt':
                 await flirtCommand(sock, chatId, message);
@@ -1080,9 +1107,8 @@ async function handleMessages(sock, messageUpdate, printLog) {
                     if (userMessage) {  // Make sure there's a message
                         await handleChatbotResponse(sock, chatId, message, userMessage, senderId);
                     }
-                    await Antilink(message, sock);
-                    await handleBadwordDetection(sock, chatId, message, userMessage, senderId);
                     await handleTagDetection(sock, chatId, message, senderId);
+                    await handleMentionDetection(sock, chatId, message);
                 }
                 commandExecuted = false;
                 break;
